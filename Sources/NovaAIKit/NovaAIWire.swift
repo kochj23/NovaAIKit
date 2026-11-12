@@ -3,7 +3,8 @@
 //  NovaAIKit
 //
 //  Wire formats (pure, network-free): Ollama /api/chat, OpenAI chat completions (MLX server, TinyLLM, TinyChat,
-//  OpenWebUI, Nova fleet / Rosetta, OpenRouter, OpenAI) and the Nova Gateway's own /api/chat. Plus the
+//  OpenWebUI, Nova fleet / Rosetta, OpenRouter, OpenAI, Gemini, xAI, Mistral, DeepSeek, Meta), Anthropic's
+//  /v1/messages and the Nova Gateway's own /api/chat. Plus the
 //  transport-security rule and the URLSession wrapper (timeouts → NovaAIError.timedOut).
 //
 //  Copyright © 2026 Jordan Koch.
@@ -30,14 +31,18 @@ enum NovaAIWire {
     }
 
     /// May a key travel to `url` for `backend`? https always; plain http only to this machine (loopback) and only
-    /// for backends whose key is optional (OpenWebUI). OpenRouter/OpenAI keys go over https only, full stop.
+    /// for backends whose key is optional (OpenWebUI). Cloud keys (`requiresKey`) go over https only, full stop.
     static func keyAllowed(_ url: URL, backend: NovaAIBackend) -> Bool {
         if url.scheme?.lowercased() == "https" { return true }
         return !backend.requiresKey && isLoopback(url.host)
     }
 
-    /// Auth headers for a key.
+    /// The Anthropic API version sent with every Claude request (no `temperature`/`top_p`/`top_k` on this version).
+    static let anthropicVersion = "2026-10-21"
+
+    /// Auth headers for a key: `x-api-key` + `anthropic-version` for Anthropic, `Authorization: Bearer` otherwise.
     static func authHeaders(_ backend: NovaAIBackend, key: String, configuration: NovaAIConfiguration) -> [String: String] {
+        if backend == .anthropic { return ["x-api-key": key, "anthropic-version": anthropicVersion] }
         var h = ["Authorization": "Bearer \(key)"]
         if backend == .openRouter {
             h["HTTP-Referer"] = configuration.appURL
@@ -87,13 +92,21 @@ enum NovaAIWire {
         return body
     }
 
-    /// OpenAI chat completions.
+    /// OpenAI chat completions. OpenAI itself gets `max_completion_tokens` and no `temperature` (its reasoning models
+    /// reject `max_tokens` and non-default temperatures); Gemini gets `reasoning_effort: low` unless `reasoning` is set,
+    /// so thinking can't eat the token budget.
     static func openAIBody(_ request: NovaAIRequest, backend: NovaAIBackend, model: String, stream: Bool, maxInput: Int) -> [String: Any] {
         var body: [String: Any] = [
             "model": model, "stream": stream,
             "messages": messages(request, backend: backend, maxInput: maxInput),
-            "temperature": request.temperature, "max_tokens": request.maxTokens,
         ]
+        if backend == .openAI {
+            body["max_completion_tokens"] = request.maxTokens
+        } else {
+            body["temperature"] = request.temperature
+            body["max_tokens"] = request.maxTokens
+        }
+        if backend == .gemini, !request.reasoning { body["reasoning_effort"] = "low" }
         if backend.supportsJSONSchema {
             switch request.format {
             case .text: break
@@ -103,6 +116,23 @@ enum NovaAIWire {
                                            "json_schema": ["name": s.name, "schema": s.object, "strict": true] as [String: Any]]
             }
         }
+        return body
+    }
+
+    /// Anthropic `/v1/messages`: system messages go to the top-level `system`; no sampling fields (rejected on
+    /// `anthropicVersion`); effort `low` unless `reasoning` (thinking stays adaptive but brief); schemas go to
+    /// `output_config.format`.
+    static func anthropicBody(_ request: NovaAIRequest, model: String, stream: Bool, maxInput: Int) -> [String: Any] {
+        let msgs = messages(request, backend: .anthropic, maxInput: maxInput)
+        let system = msgs.filter { $0["role"] == "system" }.compactMap { $0["content"] }.joined(separator: "\n\n")
+        var output: [String: Any] = ["effort": request.reasoning ? "high" : "low"]
+        if case .jsonSchema(let s) = request.format { output["format"] = ["type": "json_schema", "schema": s.object] as [String: Any] }
+        var body: [String: Any] = [
+            "model": model, "stream": stream, "max_tokens": request.maxTokens,
+            "messages": msgs.filter { $0["role"] != "system" },
+            "output_config": output,
+        ]
+        if !system.isEmpty { body["system"] = system }
         return body
     }
 
@@ -145,6 +175,9 @@ enum NovaAIWire {
                 }
                 if let t = first["text"] as? String { return t }
             }
+            if let blocks = obj["content"] as? [[String: Any]] {       // Anthropic: text blocks (thinking blocks skipped)
+                return blocks.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined()
+            }
             for key in ["response", "content", "text", "output"] { if let t = obj[key] as? String { return t } }
             return nil
         }
@@ -165,7 +198,11 @@ enum NovaAIWire {
 
     enum StreamLine: Equatable { case text(String), done, ignore }
 
-    /// One line of an Ollama NDJSON stream or an OpenAI SSE stream.
+    /// Anthropic stream event types (anything but text deltas and `message_stop` is ignored).
+    static let anthropicEvents: Set<String> = ["message_start", "content_block_start", "content_block_delta",
+                                               "content_block_stop", "message_delta", "message_stop", "ping", "error"]
+
+    /// One line of an Ollama NDJSON stream, an OpenAI SSE stream or an Anthropic SSE stream.
     static func streamLine(_ raw: String) -> StreamLine {
         var line = raw.trimmingCharacters(in: .whitespaces)
         guard !line.isEmpty, !line.hasPrefix(":") else { return .ignore }
@@ -174,6 +211,11 @@ enum NovaAIWire {
         if line == "[DONE]" { return .done }
         guard let data = line.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .ignore }
+        if let type = obj["type"] as? String, anthropicEvents.contains(type) {
+            if type == "message_stop" { return .done }
+            if let d = obj["delta"] as? [String: Any], d["type"] as? String == "text_delta", let t = d["text"] as? String { return .text(t) }
+            return .ignore
+        }
         if let msg = obj["message"] as? [String: Any], let t = msg["content"] as? String {
             return (obj["done"] as? Bool) == true && t.isEmpty ? .done : .text(t)
         }

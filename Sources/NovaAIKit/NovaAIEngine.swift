@@ -73,10 +73,11 @@ public struct NovaAIEngine: Sendable {
 
     // MARK: - Candidates
 
-    /// The backends tried, in order: the request's override, the chosen backend, or Auto's fixed order.
+    /// The backends tried, in order: the request's override (exactly that one, no failover), the chosen backend, or
+    /// Auto's fixed order (without Nova Gateway when `settings.allowNova` is off).
     public func chain(for request: NovaAIRequest? = nil) -> [NovaAIBackend] {
         if let b = request?.backend, b != .auto { return b.isSupportedOnThisPlatform ? [b] : [] }
-        if settings.backend == .auto { return NovaAIBackend.autoOrder }
+        if settings.backend == .auto { return NovaAIBackend.autoOrder.filter { settings.allowNova || $0 != .novaGateway } }
         return settings.backend.isSupportedOnThisPlatform ? [settings.backend] : []
     }
 
@@ -105,6 +106,7 @@ public struct NovaAIEngine: Sendable {
     /// Candidates minus the ones that failed within the health TTL (all of them if every one did).
     func liveCandidates(for request: NovaAIRequest) throws -> [NovaAICandidate] {
         guard settings.enabled else { throw NovaAIError.disabled }
+        if !settings.allowNova, chain(for: request).contains(.novaGateway) { throw NovaAIError.novaDisabled }
         let all = candidates(for: request)
         if all.isEmpty {
             let chain = chain(for: request)
@@ -202,6 +204,8 @@ public struct NovaAIEngine: Sendable {
         let maxInput = configuration.maxInputCharacters
         let body = c.backend.speaksOllama
             ? NovaAIWire.ollamaBody(request, model: c.model, stream: stream, maxInput: maxInput)
+            : c.backend.speaksAnthropic
+            ? NovaAIWire.anthropicBody(request, model: c.model, stream: stream, maxInput: maxInput)
             : NovaAIWire.openAIBody(request, backend: c.backend, model: c.model, stream: stream, maxInput: maxInput)
         return try NovaAIWire.post(url, body: body, headers: headers, timeout: timeout(request))
     }
@@ -321,6 +325,7 @@ public struct NovaAIEngine: Sendable {
     public func listModels(_ backend: NovaAIBackend) async -> [String] {
         guard backend != .auto else { return [] }
         if backend == .mlx, localModel != nil { return [settings.model(for: .mlx)] }
+        if backend == .novaGateway, !settings.allowNova { return backend.fallbackModels }      // nothing sent to Nova
         guard let req = try? modelsRequest(backend, baseURL: settings.url(for: backend)),
               case let (data, _)? = try? await NovaAIHTTP.data(session, req) else { return backend.fallbackModels }
         var seen = Set<String>()
@@ -335,6 +340,9 @@ public struct NovaAIEngine: Sendable {
         if backend == .mlx, let local = localModel {
             let ok = await local.isAvailable()
             return NovaAIProbe(backend: backend, reachable: ok, baseURL: Self.inProcess, detail: ok ? "in-process model ready" : "in-process model unavailable")
+        }
+        if backend == .novaGateway, !settings.allowNova {
+            return NovaAIProbe(backend: backend, reachable: false, detail: "Nova is turned off")
         }
         if backend.requiresKey, !keys.hasKey(for: backend) {
             return NovaAIProbe(backend: backend, reachable: false, baseURL: settings.url(for: backend), detail: "no API key")

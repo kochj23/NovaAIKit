@@ -55,8 +55,7 @@ final class SecurityTests: StubbedTestCase {
     func testAutoSkipsKeyedBackendsWithoutKeys() {
         let engine = makeEngine()
         let backends = Set(engine.candidates().map(\.backend))
-        XCTAssertFalse(backends.contains(.openRouter))
-        XCTAssertFalse(backends.contains(.openAI))
+        for b in NovaAIBackend.allCases where b.requiresKey { XCTAssertFalse(backends.contains(b), b.rawValue) }
     }
 
     func testLocalBackendsNeverGetAuthorization() async throws {
@@ -238,4 +237,76 @@ func XCTAssertThrowsAsync<T>(_ body: @autoclosure () async throws -> T, _ messag
         _ = try await body()
         XCTFail("expected an error \(message)", file: file, line: line)
     } catch {}
+}
+
+// MARK: - 1.1: every cloud provider, override routing, No Nova
+
+extension SecurityTests {
+    func testEveryCloudKeyRefusedOverHTTP() async {
+        StubURLProtocol.respond { _ in .openAI("x") }
+        for b in NovaAIBackend.allCases where b.requiresKey {
+            setKey("sk-\(b.rawValue)-secret", b)
+            for url in ["http://\(cloudHosts[b]!)/v1", "http://127.0.0.1:9/v1"] {
+                do {
+                    _ = try await makeEngine(only(b, url: url)).complete(NovaAIRequest(prompt: "hi"))
+                    XCTFail("\(b.rawValue) \(url)")
+                } catch {
+                    guard case NovaAIError.insecureTransport = error else { return XCTFail("\(b.rawValue): \(error)") }
+                }
+            }
+        }
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty, "nothing may be sent")
+    }
+
+    func testEachKeyGoesOnlyToItsOwnBackendsHost() async throws {
+        let cloud = NovaAIBackend.allCases.filter(\.requiresKey)
+        for b in cloud { setKey("sk-\(b.rawValue)-0123456789", b) }
+        StubURLProtocol.respond { r in reply(for: cloudBackend(r.url) ?? .openAI, "ok") }
+        let engine = makeEngine(only(.ollama))
+        for b in cloud {
+            _ = try await engine.complete(NovaAIRequest(prompt: "hi", backend: b))
+            let seen = StubURLProtocol.requests.last!
+            XCTAssertEqual(seen.url.host, cloudHosts[b], b.rawValue)
+            XCTAssertEqual(seen.url.scheme, "https")
+            let wire = seen.headers.values.joined(separator: " ") + seen.bodyText
+            for other in cloud {
+                XCTAssertEqual(wire.contains("sk-\(other.rawValue)-0123456789"), other == b, "\(other.rawValue) key in a \(b.rawValue) request")
+            }
+        }
+        XCTAssertEqual(StubURLProtocol.requests.count, cloud.count)
+    }
+
+    func testAnthropicKeyUsesXAPIKeyNotAuthorization() async throws {
+        setKey("sk-ant-test", .anthropic)
+        StubURLProtocol.respond { _ in .anthropic("ok") }
+        _ = try await makeEngine(only(.anthropic)).complete(NovaAIRequest(prompt: "hi"))
+        let h = StubURLProtocol.requests[0].headers
+        XCTAssertEqual(h["x-api-key"], "sk-ant-test")
+        XCTAssertEqual(h["anthropic-version"], NovaAIWire.anthropicVersion)
+        XCTAssertNil(h["Authorization"])
+        XCTAssertEqual(StubURLProtocol.requests[0].url.absoluteString, "https://api.anthropic.com/v1/messages")
+    }
+
+    func testOverrideNeverBorrowsAnotherBackendsKey() async {
+        setKey("sk-openai-only", .openAI)
+        StubURLProtocol.respond { _ in .openAI("x") }
+        do {
+            _ = try await makeEngine().complete(NovaAIRequest(prompt: "hi", backend: .xAI))
+            XCTFail()
+        } catch { XCTAssertEqual(error as? NovaAIError, .missingKey(.xAI)) }
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
+    }
+
+    func testNoNovaNeverContactsTheGateway() async {
+        StubURLProtocol.respond { _ in .fail(.cannotConnectToHost) }
+        var s = NovaAISettings(allowNova: false)
+        s.setURL("https://nova.example.com", for: .novaGateway)
+        _ = try? await makeEngine(s).complete(NovaAIRequest(prompt: "hi"))
+        _ = await makeEngine(s).probeAll()
+        _ = await makeEngine(s).listModels(.novaGateway)
+        _ = await makeEngine(s).probe(.novaGateway)
+        await XCTAssertThrowsAsync(try await makeEngine(s).complete(NovaAIRequest(prompt: "hi", backend: .novaGateway)))
+        XCTAssertFalse(StubURLProtocol.requests.contains { $0.url.host == "nova.example.com" })
+        XCTAssertFalse(StubURLProtocol.requests.isEmpty, "the local backends were still tried")
+    }
 }

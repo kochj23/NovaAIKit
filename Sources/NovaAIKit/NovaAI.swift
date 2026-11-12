@@ -74,7 +74,9 @@ public final class NovaAI: ObservableObject {
             guard settings != oldValue else { return }
             storage.save(settings)
             if !settings.enabled { status.state = .off; status.activeBackend = nil }
-            else if !oldValue.enabled || settings.backend != oldValue.backend { status.state = .unknown }
+            else if !oldValue.enabled || settings.backend != oldValue.backend || settings.allowNova != oldValue.allowNova {
+                status.state = .unknown
+            }
         }
     }
     @Published public private(set) var status = NovaAIStatus()
@@ -117,6 +119,18 @@ public final class NovaAI: ObservableObject {
     public var isEnabled: Bool {
         get { settings.enabled }
         set { settings.enabled = newValue }
+    }
+
+    /// "No Nova" switch (persisted). See `NovaAISettings.allowNova`.
+    public var allowNova: Bool {
+        get { settings.allowNova }
+        set { settings.allowNova = newValue }
+    }
+
+    /// Concrete backends usable on this platform with the current settings (Auto's order; no Nova Gateway when
+    /// `allowNova` is off). What the pickers offer.
+    public var availableBackends: [NovaAIBackend] {
+        NovaAIBackend.autoOrder.filter { settings.allowNova || $0 != .novaGateway }
     }
 
     /// A snapshot engine for the current settings (safe to use off the main actor).

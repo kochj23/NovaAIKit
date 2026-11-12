@@ -27,6 +27,9 @@ struct StubReply: Sendable {
     static func openAI(_ text: String) -> StubReply {
         .json(#"{"choices":[{"index":0,"message":{"role":"assistant","content":\#(quoted(text))}}]}"#)
     }
+    static func anthropic(_ text: String) -> StubReply {
+        .json(#"{"type":"message","role":"assistant","content":[{"type":"thinking","thinking":""},{"type":"text","text":\#(quoted(text))}],"stop_reason":"end_turn"}"#)
+    }
     static func quoted(_ s: String) -> String {
         String(data: try! JSONSerialization.data(withJSONObject: [s]), encoding: .utf8)!.dropFirst().dropLast().description
     }
@@ -150,3 +153,19 @@ class StubbedTestCase: XCTestCase {
         return s
     }
 }
+
+/// The cloud backends 1.1 added, plus their default hosts.
+let newCloud: [NovaAIBackend] = [.anthropic, .gemini, .xAI, .mistral, .deepSeek, .meta]
+let cloudHosts: [NovaAIBackend: String] = [
+    .openRouter: "openrouter.ai", .openAI: "api.openai.com", .anthropic: "api.anthropic.com",
+    .gemini: "generativelanguage.googleapis.com", .xAI: "api.x.ai", .mistral: "api.mistral.ai",
+    .deepSeek: "api.deepseek.com", .meta: "api.meta.ai",
+]
+
+/// A stub reply in the wire shape `backend` speaks.
+func reply(for backend: NovaAIBackend, _ text: String) -> StubReply {
+    backend == .anthropic ? .anthropic(text) : backend == .ollama ? .ollama(text) : .openAI(text)
+}
+
+/// The backend whose default host `url` points at (cloud only).
+func cloudBackend(_ url: URL) -> NovaAIBackend? { cloudHosts.first { $0.value == url.host }?.key }

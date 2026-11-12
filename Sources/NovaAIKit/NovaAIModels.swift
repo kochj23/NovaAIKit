@@ -83,9 +83,12 @@ public struct NovaAIRequest: Sendable, Equatable {
     public var temperature: Double
     public var maxTokens: Int
     public var format: NovaAIResponseFormat
-    /// Use this backend only (no Auto failover). nil: the user's setting.
+    /// Per-request override: send this request to exactly this backend (no Auto failover), with that backend's URL
+    /// and Keychain key from settings. For model-vs-model play, give each side its own backend/model. nil or `.auto`:
+    /// the user's setting.
     public var backend: NovaAIBackend?
-    /// Use this model on whichever backend answers. nil: the per-backend model from settings.
+    /// Per-request model override (with `backend`: exactly this model there; alone: this model on whichever backend
+    /// answers). nil: the per-backend model from settings.
     public var model: String?
     /// Per-attempt timeout in seconds. nil: the settings value.
     public var timeout: TimeInterval?
@@ -106,13 +109,14 @@ public struct NovaAIRequest: Sendable, Equatable {
         self.timeout = timeout
     }
 
-    /// A single-turn request: optional system prompt, then the user prompt.
+    /// A single-turn request: optional system prompt, then the user prompt. `backend`/`model` override the settings
+    /// for this request only.
     public init(prompt: String, system: String? = nil, temperature: Double = 0.7, maxTokens: Int = 1024,
-                format: NovaAIResponseFormat = .text) {
+                format: NovaAIResponseFormat = .text, backend: NovaAIBackend? = nil, model: String? = nil) {
         var m: [NovaAIMessage] = []
         if let system, !system.isEmpty { m.append(.system(system)) }
         m.append(.user(prompt))
-        self.init(messages: m, temperature: temperature, maxTokens: maxTokens, format: format)
+        self.init(messages: m, temperature: temperature, maxTokens: maxTokens, format: format, backend: backend, model: model)
     }
 }
 
@@ -168,6 +172,8 @@ public enum NovaAIError: Error, Equatable, Sendable, LocalizedError {
     case invalidSchema
     /// Every candidate failed; the last failure's description.
     case allBackendsFailed(String)
+    /// The request needed Nova Gateway but `settings.allowNova` is off. Nothing was sent.
+    case novaDisabled
 
     public var errorDescription: String? {
         switch self {
@@ -183,6 +189,7 @@ public enum NovaAIError: Error, Equatable, Sendable, LocalizedError {
         case .validationFailed(let why): return "The AI reply was rejected: \(why)"
         case .invalidSchema: return "The JSON schema is not a JSON object."
         case .allBackendsFailed(let last): return "Every AI backend failed (last: \(last))."
+        case .novaDisabled: return "Nova is turned off (Settings > AI > Allow Nova). Pick another backend."
         }
     }
 }

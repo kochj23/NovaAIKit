@@ -34,14 +34,19 @@ public struct NovaAISettings: Codable, Sendable, Equatable {
     public var extraOllamaEndpoints: [NovaAIEndpoint] = []
     /// Seconds per attempt before failing over (clamped 2…600).
     public var timeout: TimeInterval = 60
+    /// "No Nova" switch. Off: Auto skips Nova Gateway, and any request that names it fails fast with
+    /// `NovaAIError.novaDisabled` without sending anything. Every other backend works without Nova.
+    public var allowNova: Bool = true
 
     public static let maxURLLength = 300
     public static let maxModelLength = 200
     public static let timeoutRange: ClosedRange<TimeInterval> = 2...600
 
     public init(enabled: Bool = true, backend: NovaAIBackend = .auto, urls: [String: String] = [:],
-                models: [String: String] = [:], extraOllamaEndpoints: [NovaAIEndpoint] = [], timeout: TimeInterval = 60) {
+                models: [String: String] = [:], extraOllamaEndpoints: [NovaAIEndpoint] = [], timeout: TimeInterval = 60,
+                allowNova: Bool = true) {
         self.enabled = enabled
+        self.allowNova = allowNova
         self.backend = backend
         self.urls = Self.clean(urls, max: Self.maxURLLength)
         self.models = Self.clean(models, max: Self.maxModelLength)
@@ -49,7 +54,7 @@ public struct NovaAISettings: Codable, Sendable, Equatable {
         self.timeout = min(max(timeout, Self.timeoutRange.lowerBound), Self.timeoutRange.upperBound)
     }
 
-    enum CodingKeys: String, CodingKey { case enabled, backend, urls, models, extraOllamaEndpoints, timeout }
+    enum CodingKeys: String, CodingKey { case enabled, backend, urls, models, extraOllamaEndpoints, timeout, allowNova }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -62,6 +67,7 @@ public struct NovaAISettings: Codable, Sendable, Equatable {
         extraOllamaEndpoints = ((try? c.decodeIfPresent([NovaAIEndpoint].self, forKey: .extraOllamaEndpoints)) ?? nil) ?? []
         let t = ((try? c.decodeIfPresent(Double.self, forKey: .timeout)) ?? nil) ?? d.timeout
         timeout = min(max(t.isFinite ? t : d.timeout, Self.timeoutRange.lowerBound), Self.timeoutRange.upperBound)
+        allowNova = ((try? c.decodeIfPresent(Bool.self, forKey: .allowNova)) ?? nil) ?? d.allowNova
     }
 
     /// Only known, concrete backends with non-empty values within the length cap.

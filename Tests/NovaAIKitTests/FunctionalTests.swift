@@ -366,3 +366,115 @@ final class FunctionalTests: StubbedTestCase {
         #endif
     }
 }
+
+// MARK: - 1.1: providers end to end, model-vs-model overrides, No Nova
+
+extension FunctionalTests {
+    func testEveryNewProviderEndToEnd() async throws {
+        StubURLProtocol.respond { r in reply(for: cloudBackend(r.url) ?? .openAI, "hi from \(r.url.host ?? "")") }
+        for b in newCloud {
+            setKey("sk-\(b.rawValue)", b)
+            let r = try await makeEngine(only(b)).complete(NovaAIRequest(prompt: "x", system: "s"))
+            XCTAssertEqual(r.backend, b)
+            XCTAssertEqual(r.model, b.defaultModel)
+            XCTAssertEqual(r.text, "hi from \(cloudHosts[b]!)")
+            XCTAssertEqual(StubURLProtocol.requests.last?.url.absoluteString, b.defaultURL + b.chatPath)
+            XCTAssertEqual(StubURLProtocol.requests.last?.json["model"] as? String, b.defaultModel)
+        }
+    }
+
+    @MainActor
+    func testModelVsModelEachSideHitsExactlyItsBackendAndModel() async {
+        setKey("sk-ant", .anthropic)
+        setKey("sk-oai", .openAI)
+        StubURLProtocol.respond { r in reply(for: cloudBackend(r.url) ?? .ollama, r.url.host ?? "local") }
+        let ai = makeAI(only(.ollama))
+        let white = await ai.text(NovaAIRequest(prompt: "e4?", backend: .anthropic, model: "claude-haiku-5-5")) { "e4" }
+        let black = await ai.text(NovaAIRequest(prompt: "e5?", backend: .openAI, model: "gpt-6-astra")) { "e5" }
+        XCTAssertEqual(white.source, .ai(backend: .anthropic, model: "claude-haiku-5-5"))
+        XCTAssertEqual(black.source, .ai(backend: .openAI, model: "gpt-6-astra"))
+        let seen = StubURLProtocol.requests
+        XCTAssertEqual(seen.map { $0.url.host ?? "" }, ["api.anthropic.com", "api.openai.com"])
+        XCTAssertEqual(seen.map { $0.json["model"] as? String ?? "" }, ["claude-haiku-5-5", "gpt-6-astra"])
+    }
+
+    func testOverrideUsesSettingsURLAndNeverFailsOver() async {
+        setKey("sk-m", .mistral)
+        var s = NovaAISettings()
+        s.setURL("https://eu.mistral.example/v1", for: .mistral)
+        StubURLProtocol.respond { r in r.url.port == 11434 ? .ollama("local") : .fail(.cannotConnectToHost) }
+        await XCTAssertThrowsAsync(try await makeEngine(s).complete(NovaAIRequest(prompt: "x", backend: .mistral, model: "mistral-large-latest")))
+        XCTAssertEqual(StubURLProtocol.requests.map(\.url.absoluteString), ["https://eu.mistral.example/v1/chat/completions"])
+    }
+
+    func testAnthropicStreamAndStructured() async throws {
+        setKey("sk-ant", .anthropic)
+        StubURLProtocol.respond { _ in
+            .lines(["event: message_start", #"data: {"type":"message_start","message":{"content":[]}}"#,
+                    #"data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"x"}}"#,
+                    #"data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hi "}}"#,
+                    #"data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"there"}}"#,
+                    #"data: {"type":"message_stop"}"#])
+        }
+        var out = ""
+        for try await e in makeEngine(only(.anthropic)).stream(NovaAIRequest(prompt: "x")) { if case .delta(let d) = e { out += d } }
+        XCTAssertEqual(out, "Hi there")
+        XCTAssertEqual(StubURLProtocol.requests[0].json["stream"] as? Bool, true)
+    }
+
+    @MainActor
+    func testAnthropicStructuredOutput() async throws {
+        setKey("sk-ant", .anthropic)
+        StubURLProtocol.respond { _ in .anthropic(#"{"category":"bill","priority":2}"#) }
+        let ai = makeAI(only(.anthropic))
+        let schema = try NovaAIJSONSchema(name: "t", object: ["type": "object"])
+        let r = await ai.structured(Triage.self, NovaAIRequest(prompt: "x"), schema: schema) { Triage(category: "other", priority: 3) }
+        XCTAssertEqual(r.value, Triage(category: "bill", priority: 2))
+        let out = StubURLProtocol.requests[0].json["output_config"] as? [String: Any]
+        XCTAssertEqual((out?["format"] as? [String: Any])?["type"] as? String, "json_schema")
+    }
+
+    @MainActor
+    func testListModelsForNewProviders() async {
+        setKey("sk-ant", .anthropic)
+        StubURLProtocol.respond { _ in .json(#"{"data":[{"id":"claude-sonnet-5-5"},{"id":"claude-haiku-5-5"}],"has_more":false}"#) }
+        let ai = makeAI()
+        let list = await ai.listModels(for: .anthropic)
+        XCTAssertEqual(list, ["claude-haiku-5-5", "claude-sonnet-5-5"])
+        XCTAssertEqual(StubURLProtocol.requests.last?.url.absoluteString, "https://api.anthropic.com/v1/models")
+        XCTAssertEqual(StubURLProtocol.requests.last?.headers["x-api-key"], "sk-ant")
+        let noKey = await ai.listModels(for: .deepSeek)
+        XCTAssertEqual(noKey, NovaAIBackend.deepSeek.fallbackModels)
+    }
+
+    @MainActor
+    func testNoNovaExplicitRequestsFailFastWithClearError() async {
+        StubURLProtocol.respond { _ in .openAI("nova") }
+        let ai = makeAI(NovaAISettings(backend: .novaGateway, allowNova: false))
+        do { _ = try await ai.complete(NovaAIRequest(prompt: "x")); XCTFail() } catch {
+            XCTAssertEqual(error as? NovaAIError, .novaDisabled)
+            XCTAssertTrue(NovaAIEngine.describe(error).contains("Nova is turned off"))
+        }
+        let r = await ai.text(NovaAIRequest(prompt: "x")) { "built-in" }
+        XCTAssertEqual(r.value, "built-in")
+        XCTAssertEqual(r.source, .fallback(.unavailable(NovaAIError.novaDisabled.errorDescription!)))
+        ai.settings.backend = .ollama
+        do { _ = try await ai.complete(NovaAIRequest(prompt: "x", backend: .novaGateway)); XCTFail() } catch {
+            XCTAssertEqual(error as? NovaAIError, .novaDisabled)
+        }
+        let p = await ai.testConnection(.novaGateway)
+        XCTAssertFalse(p.reachable)
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
+    }
+
+    @MainActor
+    func testNoNovaAutoStillAnswersLocally() async throws {
+        StubURLProtocol.respond { r in r.url.port == 18792 ? .openAI("nova") : r.url.port == 8000 ? .openAI("tiny") : .fail(.cannotConnectToHost) }
+        let ai = makeAI(NovaAISettings(allowNova: false))
+        let s = try await ai.generate(prompt: "x")
+        XCTAssertEqual(s, "tiny")
+        await ai.refreshStatus()
+        XCTAssertNil(ai.status.reachability[.novaGateway])
+        XCTAssertFalse(StubURLProtocol.requests.contains { $0.url.port == 18792 })
+    }
+}

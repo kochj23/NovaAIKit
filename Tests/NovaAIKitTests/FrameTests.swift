@@ -126,3 +126,50 @@ final class FrameTests: StubbedTestCase {
     }
     #endif
 }
+
+// MARK: - 1.1: No Nova switch and the model picker
+
+extension FrameTests {
+    @MainActor
+    func testAllowNovaPersistsAndResetsStatus() async {
+        StubURLProtocol.respond { _ in .ollama("ok") }
+        let ai = makeAI(only(.ollama))
+        _ = try? await ai.complete(NovaAIRequest(prompt: "x"))
+        XCTAssertEqual(ai.status.state, .online)
+        XCTAssertTrue(ai.availableBackends.contains(.novaGateway))
+        ai.allowNova = false
+        XCTAssertEqual(ai.status.state, .unknown)
+        XCTAssertEqual(storage.load()?.allowNova, false)
+        XCTAssertFalse(ai.availableBackends.contains(.novaGateway))
+        XCTAssertEqual(ai.availableBackends.count, NovaAIBackend.autoOrder.count - 1)
+    }
+
+    @MainActor
+    func testModelPickerOffersFallbackModelsAndKeepsCurrent() {
+        let ai = makeAI()
+        let p = NovaAIModelPicker(ai: ai, title: "White", backend: .constant(.anthropic), model: .constant(""))
+        XCTAssertEqual(p.shownModels, NovaAIBackend.anthropic.fallbackModels)
+        let custom = NovaAIModelPicker(ai: ai, backend: .constant(.anthropic), model: .constant("claude-opus-5"))
+        XCTAssertEqual(custom.shownModels.first, "claude-opus-5")
+    }
+
+    #if os(macOS)
+    @MainActor
+    func testNewViewsRenderWithAndWithoutNova() {
+        StubURLProtocol.respond { _ in .fail(.cannotConnectToHost) }
+        for settings in [NovaAISettings(allowNova: false), NovaAISettings(backend: .novaGateway, allowNova: false), only(.anthropic)] {
+            let ai = makeAI(settings)
+            let view = NSHostingView(rootView: NovaAISettingsView(ai: ai).frame(width: 520, height: 900))
+            view.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(view.fittingSize.width, 0)
+            for b in [NovaAIBackend.auto, .anthropic, .gemini, .ollama] {
+                let picker = NSHostingView(rootView: Form {
+                    NovaAIModelPicker(ai: ai, title: "Black", backend: .constant(b), model: .constant(""))
+                })
+                picker.layoutSubtreeIfNeeded()
+                XCTAssertGreaterThan(picker.fittingSize.width, 0, b.rawValue)
+            }
+        }
+    }
+    #endif
+}

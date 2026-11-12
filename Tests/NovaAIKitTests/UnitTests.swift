@@ -10,23 +10,28 @@ final class UnitTests: XCTestCase {
 
     func testCanonicalRawValuesAreStable() {
         XCTAssertEqual(NovaAIBackend.allCases.map(\.rawValue),
-                       ["auto", "ollama", "mlx", "tinyllm", "tinychat", "openwebui", "novagateway", "openrouter", "openai"])
+                       ["auto", "ollama", "mlx", "tinyllm", "tinychat", "openwebui", "novagateway", "openrouter", "openai",
+                        "anthropic", "gemini", "xai", "mistral", "deepseek", "meta"])
     }
 
     func testAutoOrderIsFixedLocalFirst() {
-        XCTAssertEqual(NovaAIBackend.autoOrder, [.ollama, .mlx, .tinyChat, .tinyLLM, .openWebUI, .novaGateway, .openRouter, .openAI])
+        XCTAssertEqual(NovaAIBackend.autoOrder, [.ollama, .mlx, .tinyChat, .tinyLLM, .openWebUI, .novaGateway, .openRouter, .openAI,
+                                                 .anthropic, .gemini, .xAI, .mistral, .deepSeek, .meta])
+        let firstCloud = NovaAIBackend.autoOrder.firstIndex(where: \.requiresKey)!
+        XCTAssertTrue(NovaAIBackend.autoOrder[firstCloud...].allSatisfy(\.requiresKey), "every cloud backend comes after the local ones")
         XCTAssertEqual(NovaAIBackend.selectable.first, .auto)
         XCTAssertFalse(NovaAIBackend.autoOrder.contains(.auto))
     }
 
     func testNoRemovedCloudBackends() {
         let names = NovaAIBackend.allCases.map { $0.rawValue + $0.displayName }.joined().lowercased()
-        for gone in ["google", "azure", "aws", "watson"] { XCTAssertFalse(names.contains(gone), gone) }
+        for gone in ["vertex", "azure", "aws", "watson"] { XCTAssertFalse(names.contains(gone), gone) }
     }
 
     func testKeyRequirements() {
-        XCTAssertEqual(NovaAIBackend.allCases.filter(\.requiresKey), [.openRouter, .openAI])
-        XCTAssertEqual(NovaAIBackend.allCases.filter(\.acceptsKey), [.openWebUI, .openRouter, .openAI])
+        let cloud: [NovaAIBackend] = [.openRouter, .openAI, .anthropic, .gemini, .xAI, .mistral, .deepSeek, .meta]
+        XCTAssertEqual(NovaAIBackend.allCases.filter(\.requiresKey), cloud)
+        XCTAssertEqual(NovaAIBackend.allCases.filter(\.acceptsKey), [.openWebUI] + cloud)
     }
 
     func testDefaultURLsLocalhostExceptCloud() {
@@ -285,7 +290,7 @@ final class UnitTests: XCTestCase {
     func testErrorDescriptionsExist() {
         let all: [NovaAIError] = [.disabled, .noBackendAvailable, .invalidURL("u"), .insecureTransport("h"), .missingKey(.openAI),
                                   .httpStatus(500), .emptyResponse, .badResponse, .timedOut, .validationFailed("v"),
-                                  .invalidSchema, .allBackendsFailed("x")]
+                                  .invalidSchema, .allBackendsFailed("x"), .novaDisabled]
         for e in all { XCTAssertFalse((e.errorDescription ?? "").isEmpty) }
     }
 
@@ -293,5 +298,117 @@ final class UnitTests: XCTestCase {
         XCTAssertEqual(NovaAISource.fallback(.disabled).label, "Built-in")
         XCTAssertEqual(NovaAISource.ai(backend: .ollama, model: "m").label, "AI · Ollama (m)")
         XCTAssertTrue(NovaAISource.ai(backend: .ollama, model: "m").isAI)
+    }
+}
+
+// MARK: - 1.1: providers, overrides, No Nova
+
+extension UnitTests {
+    func testCloudProviderTable() {
+        let expect: [NovaAIBackend: (String, String, String)] = [
+            .openAI: ("https://api.openai.com/v1", "/chat/completions", "/models"),
+            .anthropic: ("https://api.anthropic.com/v1", "/messages", "/models"),
+            .gemini: ("https://generativelanguage.googleapis.com/v1beta/openai", "/chat/completions", "/models"),
+            .xAI: ("https://api.x.ai/v1", "/chat/completions", "/models"),
+            .mistral: ("https://api.mistral.ai/v1", "/chat/completions", "/models"),
+            .deepSeek: ("https://api.deepseek.com", "/chat/completions", "/models"),
+            .meta: ("https://api.meta.ai/v1", "/chat/completions", "/models"),
+        ]
+        for (b, e) in expect {
+            XCTAssertEqual(b.defaultURL, e.0, b.rawValue)
+            XCTAssertEqual(b.chatPath, e.1, b.rawValue)
+            XCTAssertEqual(b.modelsPath, e.2, b.rawValue)
+            XCTAssertTrue(b.requiresKey, b.rawValue)
+            XCTAssertEqual(b.fallbackModels.first, b.defaultModel, b.rawValue)
+        }
+        XCTAssertEqual(NovaAIBackend.anthropic.defaultModel, "claude-sonnet-5-5")
+        XCTAssertTrue(NovaAIBackend.anthropic.fallbackModels.contains("claude-haiku-5-5"))
+        XCTAssertTrue(NovaAIBackend.anthropic.speaksAnthropic)
+        XCTAssertFalse(NovaAIBackend.deepSeek.supportsJSONSchema, "DeepSeek has json_object only")
+    }
+
+    func testLegacyNamesForNewProviders() {
+        XCTAssertEqual(NovaAIBackend(legacyName: "Claude"), .anthropic)
+        XCTAssertEqual(NovaAIBackend(legacyName: "Gemini"), .gemini)
+        XCTAssertEqual(NovaAIBackend(legacyName: "Grok"), .xAI)
+        XCTAssertEqual(NovaAIBackend(legacyName: "Llama API"), .meta)
+        XCTAssertEqual(NovaAIBackend(legacyName: "DeepSeek"), .deepSeek)
+        XCTAssertEqual(NovaAIBackend(legacyName: "ChatGPT"), .openAI)
+        XCTAssertEqual(NovaAIBackend(legacyName: "googleCloud"), .auto, "the old Vertex stub had no usable key: Auto")
+    }
+
+    func testAllowNovaDefaultsOnAndRoundTrips() throws {
+        XCTAssertTrue(NovaAISettings().allowNova)
+        let old = try JSONDecoder().decode(NovaAISettings.self, from: Data(#"{"backend":"ollama"}"#.utf8))
+        XCTAssertTrue(old.allowNova, "1.0 settings keep Nova allowed")
+        let off = NovaAISettings(allowNova: false)
+        XCTAssertFalse(try JSONDecoder().decode(NovaAISettings.self, from: JSONEncoder().encode(off)).allowNova)
+        let bad = try JSONDecoder().decode(NovaAISettings.self, from: Data(#"{"allowNova":"no"}"#.utf8))
+        XCTAssertTrue(bad.allowNova)
+    }
+
+    func testAuthHeaderShapes() {
+        XCTAssertEqual(NovaAIWire.authHeaders(.anthropic, key: "k", configuration: testConfig),
+                       ["x-api-key": "k", "anthropic-version": NovaAIWire.anthropicVersion])
+        for b in [NovaAIBackend.openAI, .gemini, .xAI, .mistral, .deepSeek, .meta] {
+            XCTAssertEqual(NovaAIWire.authHeaders(b, key: "k", configuration: testConfig), ["Authorization": "Bearer k"], b.rawValue)
+        }
+    }
+
+    func testAnthropicBody() throws {
+        let schema = try NovaAIJSONSchema(name: "s", object: ["type": "object"])
+        let req = NovaAIRequest(messages: [.system("be brief"), .user("hi"), .assistant("yo"), .user("again")],
+                                temperature: 0.2, maxTokens: 77, format: .jsonSchema(schema))
+        let body = NovaAIWire.anthropicBody(req, model: "claude-haiku-5-5", stream: true, maxInput: 1000)
+        XCTAssertEqual(body["model"] as? String, "claude-haiku-5-5")
+        XCTAssertEqual(body["max_tokens"] as? Int, 77)
+        XCTAssertEqual(body["stream"] as? Bool, true)
+        XCTAssertNil(body["temperature"], "sampling fields are rejected by current Claude models")
+        XCTAssertTrue((body["system"] as? String)?.hasPrefix("be brief") == true)
+        let msgs = body["messages"] as? [[String: String]] ?? []
+        XCTAssertEqual(msgs.map { $0["role"] ?? "" }, ["user", "assistant", "user"])
+        let out = body["output_config"] as? [String: Any]
+        XCTAssertEqual(out?["effort"] as? String, "low")
+        XCTAssertEqual((out?["format"] as? [String: Any])?["type"] as? String, "json_schema")
+        var r = NovaAIRequest(prompt: "x")
+        r.reasoning = true
+        let think = NovaAIWire.anthropicBody(r, model: "m", stream: false, maxInput: 9)
+        XCTAssertEqual((think["output_config"] as? [String: Any])?["effort"] as? String, "high")
+        XCTAssertNil(think["system"])
+    }
+
+    func testOpenAICompatibleBodiesPerProvider() throws {
+        let req = NovaAIRequest(prompt: "x", temperature: 0.3, maxTokens: 50)
+        let oa = NovaAIWire.openAIBody(req, backend: .openAI, model: "gpt-6-luna", stream: false, maxInput: 99)
+        XCTAssertEqual(oa["max_completion_tokens"] as? Int, 50)
+        XCTAssertNil(oa["max_tokens"])
+        XCTAssertNil(oa["temperature"])
+        for b in [NovaAIBackend.xAI, .mistral, .deepSeek, .meta, .gemini] {
+            let body = NovaAIWire.openAIBody(req, backend: b, model: "m", stream: false, maxInput: 99)
+            XCTAssertEqual(body["temperature"] as? Double, 0.3, b.rawValue)
+            XCTAssertEqual(body["max_tokens"] as? Int, 50, b.rawValue)
+        }
+        XCTAssertEqual(NovaAIWire.openAIBody(req, backend: .gemini, model: "m", stream: false, maxInput: 9)["reasoning_effort"] as? String, "low")
+        XCTAssertNil(NovaAIWire.openAIBody(req, backend: .xAI, model: "m", stream: false, maxInput: 9)["reasoning_effort"])
+        let schema = NovaAIRequest(prompt: "x", format: .jsonSchema(try NovaAIJSONSchema(name: "s", object: ["type": "object"])))
+        XCTAssertNotNil(NovaAIWire.openAIBody(schema, backend: .mistral, model: "m", stream: false, maxInput: 99)["response_format"])
+        XCTAssertNil(NovaAIWire.openAIBody(schema, backend: .deepSeek, model: "m", stream: false, maxInput: 99)["response_format"])
+    }
+
+    func testAnthropicReplyAndStreamShapes() {
+        let reply = #"{"content":[{"type":"thinking","thinking":"secret"},{"type":"text","text":"Hel"},{"type":"text","text":"lo"}]}"#
+        XCTAssertEqual(NovaAIWire.replyText(Data(reply.utf8)), "Hello")
+        XCTAssertEqual(NovaAIWire.streamLine(#"data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"A"}}"#), .text("A"))
+        XCTAssertEqual(NovaAIWire.streamLine(#"data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hm"}}"#), .ignore)
+        XCTAssertEqual(NovaAIWire.streamLine(#"data: {"type":"message_start","message":{"content":[]}}"#), .ignore)
+        XCTAssertEqual(NovaAIWire.streamLine(#"data: {"type":"ping"}"#), .ignore)
+        XCTAssertEqual(NovaAIWire.streamLine(#"data: {"type":"message_stop"}"#), .done)
+    }
+
+    func testRequestOverrideInitializer() {
+        let r = NovaAIRequest(prompt: "move?", system: "chess", backend: .anthropic, model: "claude-haiku-5-5")
+        XCTAssertEqual(r.backend, .anthropic)
+        XCTAssertEqual(r.model, "claude-haiku-5-5")
+        XCTAssertEqual(r.messages.count, 2)
     }
 }

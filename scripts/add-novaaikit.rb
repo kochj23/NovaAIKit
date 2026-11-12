@@ -2,7 +2,7 @@
 # Adds the NovaAIKit Swift package to an Xcode project that has no project.yml (pbxproj apps).
 #
 #   gem install xcodeproj   # once (1.27+)
-#   ruby add-novaaikit.rb path/to/App.xcodeproj AppTarget [AppTests] [--mlx] [--version 1.0.0]
+#   ruby add-novaaikit.rb path/to/App.xcodeproj AppTarget [AppTests] [--mlx] [--version 1.1.0]
 #
 # Every named target gets the NovaAIKit product (--mlx also links NovaAIKitMLX into the FIRST target only).
 # Idempotent: re-running changes nothing. Package URL is the public https one (no credentials).
@@ -11,7 +11,7 @@ require 'xcodeproj'
 URL = 'https://github.com/kochj23/NovaAIKit.git'
 args = ARGV.dup
 mlx = args.delete('--mlx')
-version = '1.0.0'
+version = '1.1.0'
 if (i = args.index('--version'))
   version = args[i + 1]
   args.slice!(i, 2)

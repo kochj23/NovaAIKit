@@ -11,7 +11,7 @@ client code of its own.
 - No secret goes into source, UserDefaults, the environment or files. Keys go only through
   `NovaAI.setAPIKey` / the migration helpers.
 - Never print or log a key, or the contents of a Keychain item.
-- Use NovaAIKit `from: 1.0.0` (up to the next major version).
+- Use NovaAIKit `from: 1.1.0` (up to the next major version).
 
 ---
 
@@ -50,7 +50,7 @@ Add this to `project.yml`. Merge it with an existing `packages:` key if there is
 packages:
   NovaAIKit:
     url: https://github.com/kochj23/NovaAIKit.git
-    from: 1.0.0
+    from: 1.1.0
 ```
 
 Add the dependency to the app target, and to every other target that calls AI (widgets, CLIs, extensions):
@@ -72,7 +72,7 @@ Then run `xcodegen generate` and commit **both** `project.yml` and the regenerat
 
 ```bash
 gem list xcodeproj | grep -q xcodeproj || gem install xcodeproj
-curl -fsSLo /tmp/add-novaaikit.rb https://raw.githubusercontent.com/kochj23/NovaAIKit/1.0.0/scripts/add-novaaikit.rb
+curl -fsSLo /tmp/add-novaaikit.rb https://raw.githubusercontent.com/kochj23/NovaAIKit/1.1.0/scripts/add-novaaikit.rb
 ruby /tmp/add-novaaikit.rb "<App>.xcodeproj" "<AppTarget>" [<OtherTarget> …] [--mlx]
 ```
 
@@ -82,7 +82,7 @@ The script is idempotent. It adds the following to `project.pbxproj`:
 /* in PBXProject */            packageReferences = ( XXXX /* XCRemoteSwiftPackageReference "NovaAIKit" */, );
 /* XCRemoteSwiftPackageReference */
     XXXX = { isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/kochj23/NovaAIKit.git";
-             requirement = { kind = upToNextMajorVersion; minimumVersion = 1.0.0; }; };
+             requirement = { kind = upToNextMajorVersion; minimumVersion = 1.1.0; }; };
 /* XCSwiftPackageProductDependency */
     YYYY = { isa = XCSwiftPackageProductDependency; package = XXXX; productName = NovaAIKit; };
 /* in the target */            packageProductDependencies = ( YYYY /* NovaAIKit */, );
@@ -351,7 +351,7 @@ performance, retry, unit, integration, functional, frame), put each new test in 
 4. README: add an "AI" section listing the backends and the toggle, the fallback behaviour per feature, the keys in
    the Keychain (`com.jkoch.<appID>.*`) and the status indicator. Link to NovaAIKit. Remove claims about
    Google/Azure/AWS/IBM.
-5. Bump the version the way the repo already does. Add a CHANGELOG line: "AI: migrated to NovaAIKit 1.0.0 (…)".
+5. Bump the version the way the repo already does. Add a CHANGELOG line: "AI: migrated to NovaAIKit 1.1.0 (…)".
 6. Release ("do the needful"): export to `/Volumes/Data/xcode/binaries/YYYYMMDD-<App>-vX.Y.Z/` and the NAS, make
    the DMG, install to /Applications, push.
 

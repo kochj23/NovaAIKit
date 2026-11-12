@@ -2,7 +2,7 @@
 //  NovaAISettingsView.swift
 //  NovaAIKit
 //
-//  Drop-in AI settings: on/off, backend picker, per-backend URL + model (listed from the backend), API keys
+//  Drop-in AI settings: on/off, the "Allow Nova" switch, backend picker, per-backend URL + model (listed from the backend), API keys
 //  (SecureField → Keychain; a stored key is never shown), timeout, status and Test connection.
 //  Builds on macOS 12+, iOS 15+, tvOS 15+.
 //
@@ -34,12 +34,16 @@ public struct NovaAISettingsView: View {
         Form {
             Section(header: Text("AI"), footer: footerText) {
                 Toggle("Use AI", isOn: $ai.settings.enabled)
+                Toggle("Allow Nova (gateway / fleet)", isOn: $ai.settings.allowNova)
                 NovaAIStatusIndicator(ai: ai)
             }
             if ai.settings.enabled {
                 Section(header: Text("Backend")) {
                     Picker("Backend", selection: $ai.settings.backend) {
-                        ForEach(NovaAIBackend.selectable) { b in Text(b.displayName).tag(b) }
+                        ForEach([.auto] + ai.availableBackends) { b in Text(b.displayName).tag(b) }
+                        if !ai.settings.allowNova && ai.settings.backend == .novaGateway {
+                            Text("\(NovaAIBackend.novaGateway.displayName) (off)").tag(NovaAIBackend.novaGateway)
+                        }
                     }
                     Text(ai.settings.backend.summary).font(.caption).foregroundColor(.secondary)
                     Picker("Timeout", selection: $ai.settings.timeout) {
@@ -68,7 +72,7 @@ public struct NovaAISettingsView: View {
 
     /// Auto shows every backend in failover order; otherwise just the chosen one.
     private var shownBackends: [NovaAIBackend] {
-        ai.settings.backend == .auto ? NovaAIBackend.autoOrder : [ai.settings.backend]
+        ai.settings.backend == .auto ? ai.availableBackends : [ai.settings.backend]
     }
 
     @ViewBuilder

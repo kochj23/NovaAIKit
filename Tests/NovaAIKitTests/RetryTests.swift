@@ -137,3 +137,45 @@ final class RetryTests: StubbedTestCase {
         XCTAssertEqual(sleeps.delays, [0.5])
     }
 }
+
+// MARK: - 1.1
+
+extension RetryTests {
+    func testOverrideRetriesOnlyItsOwnBackend() async {
+        setKey("sk-ant", .anthropic)
+        StubURLProtocol.respond { _ in .status(529) }
+        do {
+            _ = try await makeEngine().complete(NovaAIRequest(prompt: "x", backend: .anthropic, model: "claude-haiku-5-5"))
+            XCTFail()
+        } catch { XCTAssertEqual(error as? NovaAIError, .httpStatus(529), "the single backend's own error, no failover") }
+        XCTAssertEqual(StubURLProtocol.requests.count, NovaAIRetryPolicy.network.maxAttempts)
+        XCTAssertTrue(StubURLProtocol.requests.allSatisfy { $0.url.host == "api.anthropic.com" })
+    }
+
+    func testCloud429RetriedThenSucceeds() async throws {
+        setKey("sk-x", .xAI)
+        let n = NovaAICounter()
+        StubURLProtocol.respond { _ in n.increment(); return n.value == 1 ? .status(429) : .openAI("grok") }
+        let r = try await makeEngine(only(.xAI)).complete(NovaAIRequest(prompt: "x"))
+        XCTAssertEqual(r.text, "grok")
+        XCTAssertEqual(r.attempts, 2)
+        XCTAssertEqual(sleeps.delays, [0.5])
+    }
+
+    func testAutoWithoutNovaFailsOverPastGatewayToCloud() async throws {
+        setKey("sk-g", .gemini)
+        StubURLProtocol.respond { r in r.url.host == cloudHosts[.gemini] ? .openAI("gemini") : .fail(.cannotConnectToHost) }
+        let r = try await makeEngine(NovaAISettings(allowNova: false)).complete(NovaAIRequest(prompt: "x"))
+        XCTAssertEqual(r.backend, .gemini)
+        XCTAssertFalse(StubURLProtocol.requests.contains { $0.url.port == 18792 })
+    }
+
+    func testNovaDisabledIsNotRetried() async {
+        do {
+            _ = try await makeEngine(NovaAISettings(backend: .novaGateway, allowNova: false)).complete(NovaAIRequest(prompt: "x"))
+            XCTFail()
+        } catch { XCTAssertEqual(error as? NovaAIError, .novaDisabled) }
+        XCTAssertTrue(sleeps.delays.isEmpty)
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
+    }
+}

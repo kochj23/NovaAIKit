@@ -86,3 +86,27 @@ final class PerformanceTests: StubbedTestCase {
         }
     }
 }
+
+// MARK: - 1.1
+
+extension PerformanceTests {
+    func testCandidatesWithEveryCloudKeyAreCheap() {
+        for b in NovaAIBackend.allCases where b.requiresKey { setKey("k", b) }
+        let engine = makeEngine()
+        XCTAssertEqual(engine.candidates().count, NovaAIBackend.autoOrder.count)
+        within(2) { for _ in 0..<2_000 { _ = engine.candidates(for: NovaAIRequest(prompt: "x", backend: .anthropic)) } }
+    }
+
+    func testAnthropicBodyBuildingIsCheap() {
+        let req = NovaAIRequest(messages: (0..<50).map { .user("turn \($0) " + String(repeating: "x", count: 200)) })
+        within(2) { for _ in 0..<500 { _ = NovaAIWire.anthropicBody(req, model: "m", stream: false, maxInput: 100_000) } }
+    }
+
+    func testNoNovaFailsFastWithoutNetwork() async {
+        let engine = makeEngine(NovaAISettings(backend: .novaGateway, allowNova: false))
+        let start = Date()
+        for _ in 0..<1_000 { _ = try? await engine.complete(NovaAIRequest(prompt: "x")) }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
+    }
+}

@@ -89,3 +89,24 @@ final class IntegrationTests: XCTestCase {
         XCTAssertFalse(text.contains("<think>"))
     }
 }
+
+// MARK: - 1.1: live local Ollama with No Nova and per-request override
+
+extension IntegrationTests {
+    @MainActor
+    func testLiveNoNovaAutoAndOverride() async throws {
+        let model = try await Self.liveModel()
+        var s = NovaAISettings(backend: .auto, timeout: 240, allowNova: false)
+        s.setURL("http://127.0.0.1:1", for: .mlx)          // keep Auto off any other local server
+        let ai = NovaAI(configuration: NovaAIConfiguration(appID: "novaaikit-integration", appName: "NovaAIKit Integration"),
+                        storage: NovaAIMemoryStorage(s), keyStore: NovaAIMemoryKeyStore())
+        let r = try await ai.complete(NovaAIRequest(prompt: "Say OK.", maxTokens: 400, backend: .ollama, model: model))
+        XCTAssertEqual(r.backend, .ollama)
+        XCTAssertEqual(r.model, model)
+        do { _ = try await ai.complete(NovaAIRequest(prompt: "x", backend: .novaGateway)); XCTFail() } catch {
+            XCTAssertEqual(error as? NovaAIError, .novaDisabled)
+        }
+        await ai.refreshStatus()
+        XCTAssertNil(ai.status.reachability[.novaGateway], "Nova never probed")
+    }
+}

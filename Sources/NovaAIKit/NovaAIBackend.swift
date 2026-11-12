@@ -3,8 +3,9 @@
 //  NovaAIKit
 //
 //  The canonical backend ids shared by every app (from the games' LLMBackendType). Raw values are stable,
-//  lowercase and persisted; display names are separate. Google/Azure/AWS/IBM Watson are deliberately absent:
-//  they were stubs that never worked. Claude is reached through `openRouter` or `novaGateway`.
+//  lowercase and persisted; display names are separate. The cloud providers (OpenAI, Anthropic, Gemini, xAI,
+//  Mistral, DeepSeek, Meta, OpenRouter) each need their own Keychain key and https. Google Cloud (Vertex)/Azure/AWS/
+//  IBM Watson are deliberately absent: they were stubs that never worked.
 //
 //  Copyright © 2026 Jordan Koch.
 //
@@ -22,13 +23,20 @@ public enum NovaAIBackend: String, CaseIterable, Codable, Sendable, Identifiable
     case novaGateway = "novagateway"
     case openRouter = "openrouter"
     case openAI = "openai"
+    case anthropic = "anthropic"
+    case gemini = "gemini"
+    case xAI = "xai"
+    case mistral = "mistral"
+    case deepSeek = "deepseek"
+    case meta = "meta"
 
     public var id: String { rawValue }
 
-    /// Auto's fixed failover order: local first, then Nova's fleet, then the keyed cloud backends.
-    /// MLX is left out on iOS/tvOS (it needs a Mac).
+    /// Auto's fixed failover order: local first, then Nova's fleet (skipped when `settings.allowNova` is off), then
+    /// the keyed cloud backends (each only when its key is stored). MLX is left out on iOS/tvOS (it needs a Mac).
     public static var autoOrder: [NovaAIBackend] {
-        [.ollama, .mlx, .tinyChat, .tinyLLM, .openWebUI, .novaGateway, .openRouter, .openAI].filter(\.isSupportedOnThisPlatform)
+        [.ollama, .mlx, .tinyChat, .tinyLLM, .openWebUI, .novaGateway,
+         .openRouter, .openAI, .anthropic, .gemini, .xAI, .mistral, .deepSeek, .meta].filter(\.isSupportedOnThisPlatform)
     }
 
     /// Every backend the pickers offer on this platform (Auto first).
@@ -44,7 +52,13 @@ public enum NovaAIBackend: String, CaseIterable, Codable, Sendable, Identifiable
         case .openWebUI: return "OpenWebUI"
         case .novaGateway: return "Nova Gateway / Fleet"
         case .openRouter: return "OpenRouter"
-        case .openAI: return "OpenAI"
+        case .openAI: return "OpenAI (ChatGPT)"
+        case .anthropic: return "Anthropic Claude"
+        case .gemini: return "Google Gemini"
+        case .xAI: return "xAI Grok"
+        case .mistral: return "Mistral"
+        case .deepSeek: return "DeepSeek"
+        case .meta: return "Meta (Model API)"
         }
     }
 
@@ -60,6 +74,12 @@ public enum NovaAIBackend: String, CaseIterable, Codable, Sendable, Identifiable
         case .novaGateway: return "point.3.connected.trianglepath.dotted"
         case .openRouter: return "cloud"
         case .openAI: return "cloud.fill"
+        case .anthropic: return "text.bubble"
+        case .gemini: return "sparkle"
+        case .xAI: return "xmark.circle"
+        case .mistral: return "wind"
+        case .deepSeek: return "water.waves"
+        case .meta: return "infinity"
         }
     }
 
@@ -74,7 +94,13 @@ public enum NovaAIBackend: String, CaseIterable, Codable, Sendable, Identifiable
         case .openWebUI: return "Self-hosted OpenWebUI (optional API key)."
         case .novaGateway: return "Nova Gateway or any OpenAI-compatible fleet endpoint (inference router, Rosetta)."
         case .openRouter: return "Frontier models (Claude, GPT, Gemini…) with one key. https only."
-        case .openAI: return "OpenAI API. https only."
+        case .openAI: return "OpenAI API (ChatGPT models). https only."
+        case .anthropic: return "Anthropic Messages API (Claude). https only."
+        case .gemini: return "Google Gemini API (OpenAI-compatible endpoint). https only."
+        case .xAI: return "xAI API (Grok). https only."
+        case .mistral: return "Mistral AI API. https only."
+        case .deepSeek: return "DeepSeek API. https only."
+        case .meta: return "Meta Model API (Muse models; Meta's current developer API). https only."
         }
     }
 
@@ -90,6 +116,12 @@ public enum NovaAIBackend: String, CaseIterable, Codable, Sendable, Identifiable
         case .novaGateway: return "http://127.0.0.1:18792"
         case .openRouter: return "https://openrouter.ai/api/v1"
         case .openAI: return "https://api.openai.com/v1"
+        case .anthropic: return "https://api.anthropic.com/v1"
+        case .gemini: return "https://generativelanguage.googleapis.com/v1beta/openai"
+        case .xAI: return "https://api.x.ai/v1"
+        case .mistral: return "https://api.mistral.ai/v1"
+        case .deepSeek: return "https://api.deepseek.com"
+        case .meta: return "https://api.meta.ai/v1"
         }
     }
 
@@ -103,7 +135,13 @@ public enum NovaAIBackend: String, CaseIterable, Codable, Sendable, Identifiable
         case .openWebUI: return "qwen3:8b"
         case .novaGateway: return "nova"
         case .openRouter: return "anthropic/claude-sonnet-4.5"
-        case .openAI: return "gpt-4o-mini"
+        case .openAI: return "gpt-6-luna"
+        case .anthropic: return "claude-sonnet-5-5"
+        case .gemini: return "gemini-3.8-flash"
+        case .xAI: return "grok-4.7"
+        case .mistral: return "mistral-small-latest"
+        case .deepSeek: return "deepseek-flash"
+        case .meta: return "muse-spark-1.3"
         }
     }
 
@@ -113,7 +151,13 @@ public enum NovaAIBackend: String, CaseIterable, Codable, Sendable, Identifiable
         case .openRouter:
             return ["anthropic/claude-sonnet-4.5", "openai/gpt-4o", "google/gemini-2.0-flash-001",
                     "meta-llama/llama-3.3-70b-instruct", "deepseek/deepseek-chat"]
-        case .openAI: return ["gpt-4o-mini", "gpt-4o"]
+        case .openAI: return ["gpt-6-luna", "gpt-6-astra"]
+        case .anthropic: return ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"]
+        case .gemini: return ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview"]
+        case .xAI: return ["grok-4.7", "grok-build-0.1"]
+        case .mistral: return ["mistral-small-latest", "mistral-large-latest"]
+        case .deepSeek: return ["deepseek-flash", "deepseek-v4-pro"]
+        case .meta: return ["muse-spark-1.3", "muse-ember-1.0", "muse-wonder-1.0"]
         case .novaGateway: return ["nova", "conversation", "code", "fast", "reasoner"]
         case .auto: return []
         default: return [defaultModel]
@@ -121,17 +165,25 @@ public enum NovaAIBackend: String, CaseIterable, Codable, Sendable, Identifiable
     }
 
     /// Cloud backends: never called without a Keychain key, and only over https.
-    public var requiresKey: Bool { self == .openRouter || self == .openAI }
+    public var requiresKey: Bool {
+        [.openRouter, .openAI, .anthropic, .gemini, .xAI, .mistral, .deepSeek, .meta].contains(self)
+    }
 
     /// Backends that send a key when one is stored (required or optional).
     public var acceptsKey: Bool { requiresKey || self == .openWebUI }
 
-    /// Wire protocol: Ollama's `/api/chat`, or OpenAI chat completions for everything else.
+    /// Wire protocol: Ollama's `/api/chat`, Anthropic's `/messages`, or OpenAI chat completions for everything else.
     public var speaksOllama: Bool { self == .ollama }
 
-    /// Accepts a JSON schema natively (Ollama `format`, OpenAI `response_format`). Others get the schema in the
-    /// system prompt; the kit always extracts and validates the JSON either way.
-    public var supportsJSONSchema: Bool { [.ollama, .openRouter, .openAI, .novaGateway].contains(self) }
+    /// Anthropic's native Messages API. Its OpenAI-compatible endpoint forwards `temperature`, which current Claude
+    /// models reject, so Claude gets its own wire format (`x-api-key`, `anthropic-version`, no sampling fields).
+    public var speaksAnthropic: Bool { self == .anthropic }
+
+    /// Accepts a JSON schema natively (Ollama `format`, OpenAI `response_format`, Anthropic `output_config.format`).
+    /// Others get the schema in the system prompt; the kit always extracts and validates the JSON either way.
+    public var supportsJSONSchema: Bool {
+        [.ollama, .openRouter, .openAI, .novaGateway, .anthropic, .gemini, .xAI, .mistral].contains(self)
+    }
 
     /// Path appended to the base URL for a chat request.
     public var chatPath: String {
@@ -140,7 +192,8 @@ public enum NovaAIBackend: String, CaseIterable, Codable, Sendable, Identifiable
         case .ollama: return "/api/chat"
         case .tinyChat: return "/api/chat/stream"
         case .openWebUI: return "/api/chat/completions"
-        case .openRouter, .openAI: return "/chat/completions"     // base already ends in /v1
+        case .anthropic: return "/messages"
+        case .openRouter, .openAI, .gemini, .xAI, .mistral, .deepSeek, .meta: return "/chat/completions"  // base has the version
         case .mlx, .tinyLLM, .novaGateway: return "/v1/chat/completions"
         }
     }
@@ -152,7 +205,7 @@ public enum NovaAIBackend: String, CaseIterable, Codable, Sendable, Identifiable
         case .ollama: return "/api/tags"
         case .tinyChat: return "/"
         case .openWebUI: return "/api/models"
-        case .openRouter, .openAI: return "/models"
+        case .openRouter, .openAI, .anthropic, .gemini, .xAI, .mistral, .deepSeek, .meta: return "/models"
         case .mlx, .tinyLLM, .novaGateway: return "/v1/models"
         }
     }
@@ -167,7 +220,9 @@ public enum NovaAIBackend: String, CaseIterable, Codable, Sendable, Identifiable
     }
 
     /// Maps the names older apps persisted (display names of the old `AIBackendManager.AIBackend`, GTNW's
-    /// "Auto (Prefer Ollama)", lowercase ids) to a canonical backend. Removed clouds (Google/Azure/AWS/IBM) map to Auto.
+    /// "Auto (Prefer Ollama)", lowercase ids) to a canonical backend. The removed stubs (Google Cloud AI, Azure, AWS,
+    /// IBM Watson) still map to Auto, not to Gemini: they had no working key to carry over (Google Cloud AI was a Vertex
+    /// stub, Gemini needs a Gemini API key), and Auto keeps such an app working with no setup.
     public init?(legacyName raw: String) {
         let s = raw.trimmingCharacters(in: .whitespaces).lowercased()
         if let b = NovaAIBackend(rawValue: s) { self = b; return }
@@ -176,6 +231,12 @@ public enum NovaAIBackend: String, CaseIterable, Codable, Sendable, Identifiable
         case "open webui": self = .openWebUI
         case "nova gateway", "nova", "gateway": self = .novaGateway
         case "openrouter (frontier models)", "open router": self = .openRouter
+        case "chatgpt", "openai (chatgpt)": self = .openAI
+        case "claude", "anthropic claude", "anthropic (claude)": self = .anthropic
+        case "google gemini", "gemini api": self = .gemini
+        case "grok", "xai grok", "x.ai": self = .xAI
+        case "mistral ai": self = .mistral
+        case "llama", "llama api", "meta llama", "meta (model api)", "meta model api": self = .meta
         case _ where s.hasPrefix("auto"): self = .auto
         case "google cloud ai", "googlecloud", "microsoft azure", "azurecognitive", "aws ai services", "awsai",
              "ibm watson", "ibmwatson":
